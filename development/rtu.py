@@ -10,7 +10,7 @@ Description: Gathers transformer analog inputs and remote switch points with
 import logging
 import asyncio
 import psutil  # Dynamic resource monitoring
-from pymodbus.server import StartAsyncServer
+from pymodbus.server import StartAsyncTcpServer
 from pymodbus.datastore import ModbusSequentialDataBlock, ModbusSlaveContext, ModbusServerContext
 
 # --- IEC 62443 Defensive Mapping Configuration ---
@@ -90,7 +90,7 @@ async def run_rtu_server():
     asyncio.create_task(update_monitoring_metrics(context))
     
     # Start the Modbus TCP Server listener
-    await StartAsyncServer(
+    await StartAsyncTcpServer(
         context=context,
         address=("127.0.0.1", 5021)
     )

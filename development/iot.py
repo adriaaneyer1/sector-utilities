@@ -61,7 +61,7 @@ def publish_heartbeat(client: mqtt.Client):
 
 def main():
     # Use explicit, clean client configurations
-    client = mqtt.Client(callback_api_version=mqtt.CallbackApiVersion.VERSION2)
+    client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
     
     try:
         client.connect(MQTT_BROKER, MQTT_PORT, 60)

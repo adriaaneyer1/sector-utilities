@@ -47,7 +47,7 @@ def calculate_telemetry_mac(payload: dict, key: bytes) -> str:
 
 def main():
     # Initialize MQTT client with modern API lifecycle hooks
-    client = mqtt.Client(callback_api_version=mqtt.CallbackApiVersion.VERSION2)
+    client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
     
     # Audit log entry for component startup & state initialization
     log.info("SYS_001: Initializing secure DER Gateway subsystem.")

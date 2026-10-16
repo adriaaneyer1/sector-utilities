@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Device Name: Secure Virtual PLC (Programmable Logic Controller)
-Protocol: Modbus TCP Security (TLS / Port 8502)
-Description: Hosts an encrypted Modbus server mapping system runtime registers,
+Protocol: Modbus TCP (Port 5020)
+Description: Hosts a Modbus server mapping system runtime registers,
              operational status, and legacy firmware metadata for compliance auditing.
 Compliance Reference: Aligned with IEC 62443-4-2 Component Security Requirements 
                       (FR 1 - Identification/Authentication & FR 3 - System Integrity).
@@ -10,7 +10,7 @@ Compliance Reference: Aligned with IEC 62443-4-2 Component Security Requirements
 
 import logging
 import asyncio
-from pymodbus.server import StartAsyncServer
+from pymodbus.server import StartAsyncTcpServer
 from pymodbus.device import ModbusDeviceIdentification
 from pymodbus.datastore import ModbusSequentialDataBlock, ModbusSlaveContext, ModbusServerContext
 
@@ -57,15 +57,15 @@ async def run_secure_plc():
     # -------------------------------------------------------------------------
     # IEC 62443 PROTOCOL ENHANCEMENT: MODBUS TLS CONFIGURATION
     # -------------------------------------------------------------------------
-    # Standard Modbus uses port 502/5020 (Unencrypted). 
-    # Modbus TLS typically uses port 8502 to enforce encrypted pipelines (Conduits).
-    server_address = ("127.0.0.1", 8502)
+    # Lab listen port matches the compliance agent (PLC_PORT=5020).
+    # Modbus TLS typically uses 8502; TLS kwargs below stay commented until certs exist.
+    server_address = ("127.0.0.1", 5020)
     
     log.info("Initializing Modbus TCP Security server context...")
     
     try:
         # Implementing TLS parameters to block unauthorized sniffing or exploitation of device details
-        await StartAsyncServer(
+        await StartAsyncTcpServer(
             context=context,
             identity=identity,
             address=server_address,

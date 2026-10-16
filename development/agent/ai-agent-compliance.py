@@ -33,6 +33,20 @@ mqtt_data = {
     "telemetry/iot/environment": None
 }
 
+def extract_telemetry(payload):
+    """Unwrap device envelopes so checks run on the inner telemetry object.
+
+    IoT publishes {data, signature}. DER publishes {telemetry, firmware_manifest, integrity_seal}.
+    """
+    if not isinstance(payload, dict):
+        return {}, {}
+    if isinstance(payload.get("data"), dict):
+        return payload["data"], payload
+    if isinstance(payload.get("telemetry"), dict):
+        return payload["telemetry"], payload
+    return payload, payload
+
+
 # --- MQTT HANDLERS ---
 def on_message(client, userdata, msg):
     try:
@@ -48,7 +62,7 @@ def on_message(client, userdata, msg):
 
 def run_mqtt_client():
     try:
-        client = mqtt.Client(callback_api_version=mqtt.CallbackApiVersion.VERSION2)
+        client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
         client.on_message = on_message
         client.connect(MQTT_BROKER, MQTT_PORT, 60)
         for topic in TOPICS:
@@ -73,11 +87,11 @@ async def check_modbus_device(name, host, port, expected_unit_id=1):
             compliance["issues"] = []
             
             # Read Holding Registers 0 to 5
-            result = client.read_holding_registers(0, 5, slave=expected_unit_id)
+            result = client.read_holding_registers(0, count=5, slave=expected_unit_id)
             registers = result.registers if not result.isError() else []
             
             # Read Coils
-            coil_result = client.read_coils(0, 5, slave=expected_unit_id)
+            coil_result = client.read_coils(0, count=5, slave=expected_unit_id)
             coils = coil_result.bits if not coil_result.isError() else []
             
             # Compliance evaluation (Example checks based on insecure configurations)
@@ -109,23 +123,26 @@ async def query_socket_device(name, host, port, command):
         status = "ONLINE"
         compliance["issues"] = []
         
-        # Read Initial Shell Banner
-        data = await reader.read(1024)
-        banner = data.decode('utf-8', errors='ignore')
-        
-        # Send interactive command
-        writer.write(command.encode('utf-8') + b"\n")
+        banner = (await reader.read(1024)).decode("utf-8", errors="ignore")
+
+        # PDU requires a username/password handshake before commands.
+        if port == 4001:
+            writer.write(b"operator\n")
+            await writer.drain()
+            await reader.read(1024)
+            writer.write(b"OperatorPassword123!\n")
+            await writer.drain()
+            banner = (await reader.read(1024)).decode("utf-8", errors="ignore")
+
+        writer.write(command.encode("utf-8") + b"\n")
         await writer.drain()
-        
-        # Capture response
-        resp_data = await reader.read(1024)
-        response = resp_data.decode('utf-8', errors='ignore')
+        response = (await reader.read(1024)).decode("utf-8", errors="ignore")
         
         # Security parsing of strings
         if "bypass" in banner.lower() or "bypass" in response.lower():
             compliance["issues"].append("Active explicit authentication bypass banner flag detected")
         if port == 4001: # PDU specific
-            compliance["issues"].append("Cleartext unauthenticated TCP console allows remote outlet switching")
+            compliance["issues"].append("Cleartext TCP console authenticates with reusable passwords")
             compliance["remediation"] = "Implement SSH/RSA keys for shell management, disable raw socket binding, and enforce TACACS+ configuration access controls."
         elif port == 4000: # Terminal Server specific
             compliance["issues"].append("Raw telnet-like terminal session leaks backend operational serial map topology")
@@ -154,17 +171,20 @@ async def evaluate_mqtt_node(topic):
         }
         
     compliance = {"status": "FAIL", "issues": [], "remediation": ""}
-    payload = data_entry["payload"]
-    
-    # Check payload parameters
-    if "device_id" in payload or "sensor_id" in payload:
+    envelope = data_entry["payload"]
+    telemetry, envelope = extract_telemetry(envelope)
+
+    if "device_id" in telemetry or "sensor_id" in telemetry:
         compliance["issues"].append("Payload transmits unencrypted cleartext asset identifier tags")
-    if "timestamp" in payload and (time.time() - payload["timestamp"]) > 60:
+    timestamp = telemetry.get("timestamp")
+    if timestamp is not None and (time.time() - float(timestamp)) > 60:
         compliance["issues"].append("Detected packet transmission drift / legacy timestamp injection potential")
+    if "signature" not in envelope and "integrity_seal" not in envelope:
+        compliance["issues"].append("Telemetry envelope lacks an integrity signature")
         
-    compliance["remediation"] = f"Enable TLS transport on MQTT Broker connection context, sign JSON payloads utilizing localized cryptographic keys, and filter asset schemas."
+    compliance["remediation"] = "Enable TLS on the MQTT broker; keep HMAC seals and avoid exposing raw asset identifiers in cleartext fields."
     
-    return {"status": "STREAMING", "compliance": compliance, "latest_payload": payload}
+    return {"status": "STREAMING", "compliance": compliance, "latest_payload": telemetry}
 
 # --- GENERATE COMPLIANCE REPORT ---
 def output_report(report):
@@ -191,9 +211,12 @@ def output_report(report):
 async def main():
     print("Initializing DeltaStream AI Compliance Telemetry Engine...")
     mqtt_client = run_mqtt_client()
-    
-    # Allow small window to parse incoming async streams
-    await asyncio.sleep(2)
+
+    # Devices publish every 4–5s; wait until both topics have a packet or timeout.
+    if mqtt_client:
+        deadline = time.time() + 8
+        while time.time() < deadline and any(mqtt_data[t] is None for t in TOPICS):
+            await asyncio.sleep(0.25)
     
     # Gather simultaneous queries
     plc_task = check_modbus_device("Virtual PLC", PLC_HOST, PLC_PORT)

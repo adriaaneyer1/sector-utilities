@@ -1,0 +1,10 @@
+[
+  {
+    "company": "Eskom",
+    "sector": "Utilities",
+    "location": "South Africa",
+    "scan_host": "127.0.0.1",
+    "mqtt_broker": "127.0.0.1",
+    "mqtt_port": 1883
+  }
+]

@@ -1,8 +1,0 @@
-{
-  "_note": "Approved firmware per device category. A device running anything else is flagged 'Needs change control'. Example values: replace with your approved versions.",
-  "plc": "ds-sec-1.0.0",
-  "rtu": "2.2.0",
-  "terminal_server": "v2.1.0-secure",
-  "der_gateway": "v2.4.1-secure",
-  "iot_sensor": "2.1.4-secure"
-}

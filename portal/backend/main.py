@@ -4,9 +4,11 @@ DeltaStream portal API.
 The pages show whatever the agents last reported:
   GET  /api/devices              Discovery Agent report + compliance verdict (Devices page)
   GET  /api/filters              sector / location / company options from sites.json
-  GET  /api/compliance           Compliance Agent report (Compliance page)
-  GET  /api/agents               status and live activity of both agents
-  POST /api/agents/{name}/run    run an agent now ("discovery" or "compliance")
+  GET  /api/compliance           Compliance Agent report (Non-Compliance page)
+  GET  /api/remediation          AI Remediation Agent report (Compliance page)
+  POST /api/remediation/reset    undo the agent's firmware updates (start the demo again)
+  GET  /api/agents               status and live activity of every agent
+  POST /api/agents/{name}/run    run an agent now ("discovery", "compliance" or "remediation")
 
 If frontend/dist exists (after `npm run build`), it is served at / so the
 whole portal can be deployed as one service.
@@ -22,7 +24,9 @@ from fastapi.staticfiles import StaticFiles
 
 import config
 from agents.compliance_agent import ComplianceAgent
+from agents.compliance_agent import FIRMWARE_STATE
 from agents.discovery_agent import DiscoveryAgent
+from agents.remediation_agent import RemediationAgent
 from agents.store import ReportStore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -30,11 +34,20 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 store = ReportStore(config.REPORTS_DIR)
 discovery = DiscoveryAgent(store)
 compliance = ComplianceAgent(store)
-AGENTS = {a.name: a for a in (discovery, compliance)}
+remediation = RemediationAgent(store, compliance)
+AGENTS = {a.name: a for a in (discovery, compliance, remediation)}
+
+
+def _forget_remediation():
+    store.delete(FIRMWARE_STATE)
+    store.delete(remediation.name)
+    remediation.progress = {}
 
 
 async def _startup_runs():
     """Fresh reports on start: discover first, then check compliance."""
+    if not config.KEEP_REMEDIATION:
+        _forget_remediation()  # every start shows the devices as they really are
     try:
         await discovery.run()
         await compliance.run()
@@ -72,8 +85,11 @@ def devices():
     """Discovery report, with each device's latest compliance verdict added."""
     report = store.load("discovery") or {"devices": [], "summary": None, "finished_at": None}
     checked = {d["id"]: d for d in (store.load("compliance") or {}).get("devices", [])}
+    installed = store.load(FIRMWARE_STATE) or {}
     for d in report["devices"]:
         verdict = checked.get(d["id"], {})
+        if d["id"] in installed:  # firmware the AI Remediation Agent installed
+            d["firmware"] = installed[d["id"]]["firmware"]
         d["compliance"] = verdict.get("status", "Not assessed")
         d["violations"] = verdict.get("violations", [])
     return report
@@ -90,6 +106,21 @@ def filters():
 @app.get("/api/compliance")
 def compliance_report():
     return store.load("compliance") or {"devices": [], "summary": None, "finished_at": None}
+
+
+@app.get("/api/remediation")
+def remediation_report():
+    return store.load(remediation.name) or {"devices": [], "summary": None, "finished_at": None}
+
+
+@app.post("/api/remediation/reset")
+async def reset_remediation():
+    """Undo the agent's firmware updates and re-check, so the demo can start again."""
+    if remediation.running:
+        raise HTTPException(status_code=409, detail="The AI Remediation Agent is running")
+    _forget_remediation()
+    await compliance.run()
+    return {"ok": True}
 
 
 @app.get("/api/agents")

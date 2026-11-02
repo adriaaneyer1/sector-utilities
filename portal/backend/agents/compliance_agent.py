@@ -31,8 +31,9 @@ COMPLIANT = "Compliant"
 STATUSES = (COMPLIANT, PARTIALLY_COMPLIANT, NEEDS_CHANGE_CONTROL, NON_COMPLIANT)
 
 
-def finding(title, severity=CRITICAL):
-    return {"severity": severity, "title": title}
+def finding(code, title, severity=CRITICAL):
+    """code identifies the issue so a firmware update can say which ones it fixes."""
+    return {"code": code, "severity": severity, "title": title}
 
 
 # ---------- rule sets ----------
@@ -53,14 +54,14 @@ class ModbusRules(RuleSet):
 
     def evaluate(self, device, obs):
         if not obs["reachable"]:
-            return [finding("Device is unreachable")], (
+            return [finding("unreachable", "Device is unreachable")], (
                 f"Verify network routing to cluster node and ensure the {device['name']} process is active.")
         if device["category"] == "plc":
             return [
-                finding("Unencrypted Modbus TCP protocol exposed without TLS wrapper"),
-                finding("No authentication layer enforced on device registers"),
+                finding("modbus_no_tls", "Unencrypted Modbus TCP protocol exposed without TLS wrapper"),
+                finding("modbus_no_auth", "No authentication layer enforced on device registers"),
             ], "Wrap communication in a TLS tunnel (Port 8021/Stunnel) and integrate IEC 62443 secure zone boundaries."
-        return [finding("Cleartext Modbus transport vulnerable to command injection", HIGH)], (
+        return [finding("modbus_cleartext", "Cleartext Modbus transport vulnerable to command injection", HIGH)], (
             "Deploy hardware network taps and shift to secure protocol configurations or VPN encapsulations.")
 
 
@@ -69,16 +70,16 @@ class ConsoleRules(RuleSet):
 
     def evaluate(self, device, obs):
         if not obs["reachable"]:
-            return [finding("Interface dropped connections")], (
+            return [finding("unreachable", "Interface dropped connections")], (
                 f"Ensure the target service script is listening on port {device['port']}.")
         findings = []
         if "bypass" in (obs.get("banner") or "").lower():
-            findings.append(finding("Active explicit authentication bypass banner flag detected"))
+            findings.append(finding("console_auth_bypass", "Active explicit authentication bypass banner flag detected"))
         if device["category"] == "pdu":
-            findings.append(finding("Cleartext TCP console authenticates with reusable passwords"))
+            findings.append(finding("console_reusable_passwords", "Cleartext TCP console authenticates with reusable passwords"))
             return findings, ("Implement SSH/RSA keys for shell management, disable raw socket binding, "
                               "and enforce TACACS+ configuration access controls.")
-        findings.append(finding("Raw telnet-like terminal session leaks backend operational serial map topology", HIGH))
+        findings.append(finding("console_topology_leak", "Raw telnet-like terminal session leaks backend operational serial map topology", HIGH))
         return findings, "Migrate endpoints to encrypted network listeners and strictly boundary accessible user interfaces."
 
 
@@ -88,18 +89,18 @@ class MqttTelemetryRules(RuleSet):
     def evaluate(self, device, obs):
         if obs.get("payload") is None:
             broker = device.get("mqtt_broker", "the MQTT broker")
-            return [finding("No telemetry packets received within interval frame")], (
+            return [finding("no_telemetry", "No telemetry packets received within interval frame")], (
                 f"Verify the MQTT broker {broker} is running and the edge simulation "
                 "device script is executing upstream.")
         telemetry, envelope = extract_telemetry(obs["payload"])
         findings = []
         if "device_id" in telemetry or "sensor_id" in telemetry:
-            findings.append(finding("Payload transmits unencrypted cleartext asset identifier tags", MEDIUM))
+            findings.append(finding("mqtt_cleartext_ids", "Payload transmits unencrypted cleartext asset identifier tags", MEDIUM))
         ts = telemetry.get("timestamp")
         if isinstance(ts, (int, float)) and time.time() - ts > TIMESTAMP_DRIFT_SECONDS:
-            findings.append(finding("Detected packet transmission drift / legacy timestamp injection potential", HIGH))
+            findings.append(finding("mqtt_timestamp_drift", "Detected packet transmission drift / legacy timestamp injection potential", HIGH))
         if "signature" not in envelope and "integrity_seal" not in envelope:
-            findings.append(finding("Telemetry envelope lacks an integrity signature", HIGH))
+            findings.append(finding("mqtt_no_signature", "Telemetry envelope lacks an integrity signature", HIGH))
         remediation = ("Enable TLS on the MQTT broker; keep HMAC seals and avoid exposing raw asset "
                        "identifiers in cleartext fields.") if findings else ""
         return findings, remediation
@@ -154,14 +155,34 @@ def _version(firmware):
     return firmware.strip().lower().lstrip("v").split(" ")[0]
 
 
-def baseline_check(device, baseline):
-    """(approved version or None, finding or None). Firmware the agent can't
-    read (e.g. the PDU before login) is not judged."""
-    approved = baseline.get(device["category"])
+def baseline_check(device, repository):
+    """(approved target version or None, finding or None). Firmware the agent
+    can't read (e.g. the PDU before login) is not judged."""
+    entry = repository.get(device["category"]) or {}
+    approved = entry.get("approved") or []
     firmware = device.get("firmware")
-    if not approved or not firmware or _version(firmware) == _version(approved):
-        return approved, None
-    return approved, finding(f"Firmware {firmware} is not the approved baseline {approved}", HIGH)
+    target = entry.get("latest") or (approved[-1] if approved else None)
+    if not approved or not firmware or _version(firmware) in {_version(v) for v in approved}:
+        return target, None
+    return target, finding("firmware_off_baseline",
+                           f"Firmware {firmware} is not an approved baseline version ({', '.join(approved)})", HIGH)
+
+
+# ---------- firmware installed by the AI Remediation Agent ----------
+
+FIRMWARE_STATE = "firmware_state"   # {device_id: {firmware, previous_firmware, fixes, at}}
+
+
+def apply_installed_firmware(device, findings, remediation, installed):
+    """The virtual devices can't be re-flashed, so updates the AI Remediation
+    Agent installs are kept here and applied on every check: the device reports
+    the new version and the findings that version fixes are gone."""
+    if not installed:
+        return device, findings, remediation
+    device = {**device, "firmware": installed["firmware"]}
+    fixed = set(installed.get("fixes", []))
+    findings = [f for f in findings if f["code"] not in fixed]
+    return device, findings, remediation if findings else ""
 
 
 def status_of(reachable, findings, off_baseline):
@@ -199,7 +220,8 @@ class ComplianceAgent(Agent):
             self.step(f"Checking {len(inventory)} device(s) from the Discovery Agent's inventory")
 
         observations = await self._observe(inventory)
-        baseline = config.load_firmware_baseline()
+        repository = config.load_firmware_repository()
+        installed = self.store.load(FIRMWARE_STATE) or {}
         results = []
         for device in inventory:
             rules = next((r for r in RULE_SETS if r.applies_to(device)), None)
@@ -208,7 +230,10 @@ class ComplianceAgent(Agent):
                 continue
             findings, remediation = rules.evaluate(device, observations[device["id"]])
             reachable = observations[device["id"]]["reachable"]
-            approved, fw_finding = baseline_check(device, baseline) if reachable else (None, None)
+            if reachable:
+                device, findings, remediation = apply_installed_firmware(
+                    device, findings, remediation, installed.get(device["id"]))
+            approved, fw_finding = baseline_check(device, repository) if reachable else (None, None)
             if fw_finding:
                 findings.append(fw_finding)
                 remediation = " ".join(filter(None, [
@@ -218,12 +243,14 @@ class ComplianceAgent(Agent):
             violations = violations_for(device, findings, reachable, fw_finding is not None)
             results.append({
                 "id": device["id"],
+                "category": device["category"],
                 "name": device["name"],
                 "type": device["type"],
                 "protocol": device["protocol"],
                 "endpoint": device["endpoint"],
                 "firmware": device.get("firmware"),
                 "firmware_approved": approved,
+                "firmware_updated": device["id"] in installed,
                 "company": device.get("company"),
                 "sector": device.get("sector"),
                 "location": device.get("location"),

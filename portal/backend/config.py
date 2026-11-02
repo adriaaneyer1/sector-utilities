@@ -35,16 +35,17 @@ def load_sites():
     return json.loads(SITES_FILE.read_text(encoding="utf-8-sig"))
 
 
-# Approved firmware per device category (the change-control baseline)
-FIRMWARE_BASELINE_FILE = Path(os.getenv("FIRMWARE_BASELINE_FILE",
-                                        Path(__file__).resolve().parent / "firmware_baseline.json"))
+# Firmware repository per device category: approved versions (the
+# change-control baseline), the latest release and the findings it fixes
+FIRMWARE_REPOSITORY_FILE = Path(os.getenv("FIRMWARE_REPOSITORY_FILE",
+                                          Path(__file__).resolve().parent / "firmware_repository.json"))
 
 
-def load_firmware_baseline():
-    """{category: approved firmware version}; missing file = no baseline check."""
-    if not FIRMWARE_BASELINE_FILE.exists():
+def load_firmware_repository():
+    """{category: {approved: [...], latest, fixes: [...]}}; missing file = no firmware checks."""
+    if not FIRMWARE_REPOSITORY_FILE.exists():
         return {}
-    data = json.loads(FIRMWARE_BASELINE_FILE.read_text(encoding="utf-8-sig"))
+    data = json.loads(FIRMWARE_REPOSITORY_FILE.read_text(encoding="utf-8-sig"))
     return {k: v for k, v in data.items() if not k.startswith("_")}
 
 # Probe timing
@@ -58,4 +59,10 @@ LISTEN_SECONDS = float(os.getenv("LISTEN_SECONDS", "8"))
 DISCOVERY_INTERVAL = float(os.getenv("DISCOVERY_INTERVAL", "0"))
 COMPLIANCE_INTERVAL = float(os.getenv("COMPLIANCE_INTERVAL", "0"))
 
-REPORTS_DIR = Path(os.getenv("REPORTS_DIR", Path(__file__).resolve().parent / "reports"))
+# AI Remediation Agent: seconds each visible step takes (so the flow can be
+# followed live) and whether installed updates survive a restart. Off by
+# default: every start shows the devices as they really are.
+REMEDIATION_STEP_SECONDS = float(os.getenv("REMEDIATION_STEP_SECONDS", "0.8"))
+KEEP_REMEDIATION = os.getenv("KEEP_REMEDIATION", "0") == "1"
+
+REPORTS_DIR =Path(os.getenv("REPORTS_DIR", Path(__file__).resolve().parent / "reports"))

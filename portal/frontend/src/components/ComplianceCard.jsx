@@ -2,7 +2,7 @@ import ComplianceBadge from './ComplianceBadge.jsx'
 import ViolationList from './ViolationList.jsx'
 
 export default function ComplianceCard({ device }) {
-  const offBaseline = device.firmware_approved && device.findings.some((f) => f.title.startsWith('Firmware '))
+  const offBaseline = device.findings.some((f) => f.code === 'firmware_off_baseline')
   return (
     <article className="compliance-card">
       <div className="card-head">

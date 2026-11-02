@@ -69,7 +69,10 @@ official websites (Mosquitto runs as a Windows service).
 ```bash
 git clone https://github.com/adriaaneyer1/sector-utilities.git
 cd sector-utilities
-git checkout development
+git switch development      # not "git checkout": the repo also has a folder named development
+
+# Already cloned? Update instead:
+#   git fetch origin && git switch development && git pull origin development
 
 python3 -m venv portal/.venv
 source portal/.venv/bin/activate   # Windows: portal\.venv\Scripts\activate

@@ -34,6 +34,19 @@ def load_sites():
     # utf-8-sig: also accepts files saved by Windows editors that add a BOM
     return json.loads(SITES_FILE.read_text(encoding="utf-8-sig"))
 
+
+# Approved firmware per device category (the change-control baseline)
+FIRMWARE_BASELINE_FILE = Path(os.getenv("FIRMWARE_BASELINE_FILE",
+                                        Path(__file__).resolve().parent / "firmware_baseline.json"))
+
+
+def load_firmware_baseline():
+    """{category: approved firmware version}; missing file = no baseline check."""
+    if not FIRMWARE_BASELINE_FILE.exists():
+        return {}
+    data = json.loads(FIRMWARE_BASELINE_FILE.read_text(encoding="utf-8-sig"))
+    return {k: v for k, v in data.items() if not k.startswith("_")}
+
 # Probe timing
 CONNECT_TIMEOUT = float(os.getenv("CONNECT_TIMEOUT", "1.0"))
 BANNER_TIMEOUT = float(os.getenv("BANNER_TIMEOUT", "1.0"))

@@ -19,7 +19,16 @@ from agents.fingerprints import device_id_of
 from agents.probes import ConsoleProbe, MqttListener, TcpProbe, extract_telemetry
 
 CRITICAL = "critical"
+HIGH = "high"
+MEDIUM = "medium"
 TIMESTAMP_DRIFT_SECONDS = 60
+
+# The four compliance statuses, from worst to best
+NON_COMPLIANT = "Non-compliant"
+NEEDS_CHANGE_CONTROL = "Needs change control"
+PARTIALLY_COMPLIANT = "Partially compliant"
+COMPLIANT = "Compliant"
+STATUSES = (COMPLIANT, PARTIALLY_COMPLIANT, NEEDS_CHANGE_CONTROL, NON_COMPLIANT)
 
 
 def finding(title, severity=CRITICAL):
@@ -51,7 +60,7 @@ class ModbusRules(RuleSet):
                 finding("Unencrypted Modbus TCP protocol exposed without TLS wrapper"),
                 finding("No authentication layer enforced on device registers"),
             ], "Wrap communication in a TLS tunnel (Port 8021/Stunnel) and integrate IEC 62443 secure zone boundaries."
-        return [finding("Cleartext Modbus transport vulnerable to command injection")], (
+        return [finding("Cleartext Modbus transport vulnerable to command injection", HIGH)], (
             "Deploy hardware network taps and shift to secure protocol configurations or VPN encapsulations.")
 
 
@@ -69,7 +78,7 @@ class ConsoleRules(RuleSet):
             findings.append(finding("Cleartext TCP console authenticates with reusable passwords"))
             return findings, ("Implement SSH/RSA keys for shell management, disable raw socket binding, "
                               "and enforce TACACS+ configuration access controls.")
-        findings.append(finding("Raw telnet-like terminal session leaks backend operational serial map topology"))
+        findings.append(finding("Raw telnet-like terminal session leaks backend operational serial map topology", HIGH))
         return findings, "Migrate endpoints to encrypted network listeners and strictly boundary accessible user interfaces."
 
 
@@ -85,12 +94,12 @@ class MqttTelemetryRules(RuleSet):
         telemetry, envelope = extract_telemetry(obs["payload"])
         findings = []
         if "device_id" in telemetry or "sensor_id" in telemetry:
-            findings.append(finding("Payload transmits unencrypted cleartext asset identifier tags"))
+            findings.append(finding("Payload transmits unencrypted cleartext asset identifier tags", MEDIUM))
         ts = telemetry.get("timestamp")
         if isinstance(ts, (int, float)) and time.time() - ts > TIMESTAMP_DRIFT_SECONDS:
-            findings.append(finding("Detected packet transmission drift / legacy timestamp injection potential"))
+            findings.append(finding("Detected packet transmission drift / legacy timestamp injection potential", HIGH))
         if "signature" not in envelope and "integrity_seal" not in envelope:
-            findings.append(finding("Telemetry envelope lacks an integrity signature"))
+            findings.append(finding("Telemetry envelope lacks an integrity signature", HIGH))
         remediation = ("Enable TLS on the MQTT broker; keep HMAC seals and avoid exposing raw asset "
                        "identifiers in cleartext fields.") if findings else ""
         return findings, remediation
@@ -109,6 +118,8 @@ AUDIT_LOGGING = {"vector": "Missing Audit Logging", "standard": "NERC CIP-007 & 
                  "requirement": "Internal Network Monitoring"}
 REMOTE_ACCESS = {"vector": "Unrestricted Remote Access", "standard": "NERC CIP-003-9",
                  "requirement": "Vendor Electronic Access Control"}
+CHANGE_CONTROL = {"vector": "Unapproved Firmware Baseline", "standard": "NERC CIP-010-4",
+                  "requirement": "Configuration Change Management"}
 
 # Which standards each kind of device breaks when it fails its checks
 # (mapping confirmed with the client).
@@ -125,12 +136,47 @@ VIOLATIONS_BY_CATEGORY = {
 }
 
 
-def violations_for(device, findings, reachable):
+def violations_for(device, findings, reachable, off_baseline=False):
     """Standards breached by a failing device. An unreachable device could
     not be inspected, so no standard is attributed to it."""
     if not findings or not reachable:
         return []
-    return VIOLATIONS_BY_CATEGORY.get(device["category"], [])
+    violations = list(VIOLATIONS_BY_CATEGORY.get(device["category"], []))
+    if off_baseline:
+        violations.append(CHANGE_CONTROL)
+    return violations
+
+
+# ---------- firmware baseline and status ----------
+
+def _version(firmware):
+    """'v2.1.0-secure' -> '2.1.0-secure', '2.1.0 (build 1042)' -> '2.1.0'"""
+    return firmware.strip().lower().lstrip("v").split(" ")[0]
+
+
+def baseline_check(device, baseline):
+    """(approved version or None, finding or None). Firmware the agent can't
+    read (e.g. the PDU before login) is not judged."""
+    approved = baseline.get(device["category"])
+    firmware = device.get("firmware")
+    if not approved or not firmware or _version(firmware) == _version(approved):
+        return approved, None
+    return approved, finding(f"Firmware {firmware} is not the approved baseline {approved}", HIGH)
+
+
+def status_of(reachable, findings, off_baseline):
+    """Worst condition wins:
+    Non-compliant         unreachable, or any critical finding
+    Needs change control  firmware differs from the approved baseline
+    Partially compliant   only high / medium findings
+    Compliant             no findings"""
+    if not reachable or any(f["severity"] == CRITICAL for f in findings):
+        return NON_COMPLIANT
+    if off_baseline:
+        return NEEDS_CHANGE_CONTROL
+    if findings:
+        return PARTIALLY_COMPLIANT
+    return COMPLIANT
 
 
 # ---------- the agent ----------
@@ -153,6 +199,7 @@ class ComplianceAgent(Agent):
             self.step(f"Checking {len(inventory)} device(s) from the Discovery Agent's inventory")
 
         observations = await self._observe(inventory)
+        baseline = config.load_firmware_baseline()
         results = []
         for device in inventory:
             rules = next((r for r in RULE_SETS if r.applies_to(device)), None)
@@ -160,9 +207,15 @@ class ComplianceAgent(Agent):
                 self.step(f"'{device['name']}': no rule set for category {device['category']}, skipped")
                 continue
             findings, remediation = rules.evaluate(device, observations[device["id"]])
-            result = "fail" if findings else "pass"
             reachable = observations[device["id"]]["reachable"]
-            violations = violations_for(device, findings, reachable)
+            approved, fw_finding = baseline_check(device, baseline) if reachable else (None, None)
+            if fw_finding:
+                findings.append(fw_finding)
+                remediation = " ".join(filter(None, [
+                    remediation, f"Raise a change request and update the firmware to {approved}."]))
+            status = status_of(reachable, findings, fw_finding is not None)
+            result = "pass" if status == COMPLIANT else "fail"
+            violations = violations_for(device, findings, reachable, fw_finding is not None)
             results.append({
                 "id": device["id"],
                 "name": device["name"],
@@ -170,16 +223,18 @@ class ComplianceAgent(Agent):
                 "protocol": device["protocol"],
                 "endpoint": device["endpoint"],
                 "firmware": device.get("firmware"),
+                "firmware_approved": approved,
                 "company": device.get("company"),
                 "sector": device.get("sector"),
                 "location": device.get("location"),
                 "reachable": reachable,
                 "result": result,
+                "status": status,
                 "findings": findings,
                 "violations": violations,
                 "remediation": remediation,
             })
-            self.step(f"'{device['name']}': {result.upper()} ({len(findings)} finding(s))"
+            self.step(f"'{device['name']}': {status} ({len(findings)} finding(s))"
                       + (f", violates {', '.join(v['standard'] for v in violations)}" if violations else ""))
 
         return {
@@ -189,6 +244,7 @@ class ComplianceAgent(Agent):
                 "passing": sum(r["result"] == "pass" for r in results),
                 "failing": sum(r["result"] == "fail" for r in results),
                 "critical": sum(f["severity"] == CRITICAL for r in results for f in r["findings"]),
+                "by_status": {s: sum(r["status"] == s for r in results) for s in STATUSES},
             },
             "devices": results,
         }

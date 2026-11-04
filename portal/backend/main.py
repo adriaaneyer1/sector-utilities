@@ -72,10 +72,9 @@ def devices():
     """Discovery report, with each device's latest compliance verdict added."""
     report = store.load("discovery") or {"devices": [], "summary": None, "finished_at": None}
     checked = {d["id"]: d for d in (store.load("compliance") or {}).get("devices", [])}
-    labels = {"pass": "Compliant", "fail": "Non-Compliant"}
     for d in report["devices"]:
         verdict = checked.get(d["id"], {})
-        d["compliance"] = labels.get(verdict.get("result"), "Not assessed")
+        d["compliance"] = verdict.get("status", "Not assessed")
         d["violations"] = verdict.get("violations", [])
     return report
 

@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom'
+import { useFilters } from '../context/FilterContext.jsx'
 
 function DevicesIcon() {
   return (
@@ -28,7 +29,17 @@ function ShieldCheckIcon() {
   )
 }
 
+// Selected value, or every provisioned one when nothing is selected yet.
+function pick(selected, all) {
+  return selected || all.join(', ')
+}
+
 export default function Sidebar() {
+  const { options, filters } = useFilters()
+  const environment = [pick(filters.company, options.companies), pick(filters.location, options.locations)]
+    .filter(Boolean)
+    .join(' · ')
+
   return (
     <nav className="sidebar" aria-label="Main">
       <div className="brand">
@@ -50,7 +61,7 @@ export default function Sidebar() {
 
       <div className="env-box">
         Environment
-        <strong>Local lab · agent-discovered</strong>
+        <strong>{environment || 'Loading…'}</strong>
       </div>
     </nav>
   )

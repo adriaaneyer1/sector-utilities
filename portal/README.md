@@ -179,6 +179,7 @@ Open **http://localhost:8000/devices**.
 
 | Problem | Fix |
 |---|---|
+| `No module named uvicorn` (or fastapi, pymodbus, paho) | The environment is not active. In `sector-utilities` run `source portal/.venv/bin/activate`, then `python -m uvicorn ...` (not `python3` from `/usr/bin`) |
 | "Address already in use" | An earlier run is still active; stop it and start again |
 | DER / IoT show "No data stream" | Check Mosquitto is running (`sudo service mosquitto status`) |
 | No devices after Run agent | Check the device scripts are running in Terminal 1 |

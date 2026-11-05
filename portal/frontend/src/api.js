@@ -31,3 +31,13 @@ export function fetchAgents(signal) {
 export function runAgent(name) {
   return request(`/api/agents/${name}/run`, { method: 'POST' })
 }
+
+// Latest AI Remediation Agent report
+export function fetchRemediation(signal) {
+  return request('/api/remediation', { signal })
+}
+
+// Undo the agent's firmware updates so the demo can start again
+export function resetRemediation() {
+  return request('/api/remediation/reset', { method: 'POST' })
+}

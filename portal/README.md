@@ -9,8 +9,8 @@ portal pages. Nothing about the devices is hardcoded.
 | Milestone | Scope | Status |
 |---|---|---|
 | **1. Devices page** | Discovery Agent, global search (sector / location / company), device status, firmware, compliance verdict, standards violated | ✅ Delivered |
-| 2. Non-Compliance page | Full compliance report per device with Compliant, Partially compliant, Needs change control and Non-compliant | Planned |
-| 3. Compliance page (AI) | AI agent: check version → check firmware repository → apply update → reboot → re-check → report | Planned |
+| **2. Non-Compliance page** | Full compliance report per device with Compliant, Partially compliant, Needs change control and Non-compliant | 🔎 Ready for review |
+| **3. Compliance page (AI)** | AI agent: check version → check firmware repository → apply update → reboot → re-check → report | 🔎 Ready for review |
 
 ## What the Devices page does
 
@@ -25,14 +25,62 @@ portal pages. Nothing about the devices is hardcoded.
 
 Works on desktop, tablet and mobile (devices are shown as cards on smaller screens).
 
+## What the Non-Compliance page does
+
+Same flow: choose Sector, Location and Company, press **Run agent**. The
+**Compliance Agent** checks every device and gives it one of four statuses
+(the worst condition wins):
+
+| Status | When |
+|---|---|
+| **Non-compliant** | Device unreachable, or any *critical* finding (e.g. no authentication, reusable passwords) |
+| **Needs change control** | Firmware differs from the approved baseline: a controlled firmware update is needed (NERC CIP-010-4) |
+| **Partially compliant** | Only *high* or *medium* findings |
+| **Compliant** | No findings |
+
+Each device card shows its findings with severity, the standards violated and
+the remediation. Click a status count to show only those devices; the global
+search also filters the report. The same status appears in the **Compliant**
+column of the Devices page.
+
+The approved firmware per device type is in `portal/backend/firmware_repository.json`
+(example values: replace them with your vendor's releases).
+
+## What the Compliance page does
+
+Choose Sector, Location and Company, press **Run agent**. The **AI Remediation
+Agent** takes every device that is not Compliant and, on its own:
+
+1. **Check version**: reads the firmware the device runs.
+2. **Check repository**: finds the approved firmware that fixes its findings.
+3. **Apply update**: installs it.
+4. **Reboot**: restarts the device and waits until it answers again.
+5. **Re-check**: runs the compliance checks again.
+6. **Report**: shows each device *before → after*.
+
+Each device's steps light up live while the agent works. Devices that **Need
+change control are never remediated**: changing their firmware needs an
+approved change request first (NERC CIP-010-4), so the agent only flags them
+as *Change approval required*.
+
+Result with the virtual devices: 5 of 6 devices become Compliant; the RTU stays
+*Needs change control*. **Undo updates and start again** restores the original
+state (so does restarting the portal).
+
+> The virtual devices can't really be re-flashed, so an installed update is
+> kept by the portal and applied on every check (the Devices and Non-Compliance
+> pages show it too). The reboot check is real. With real devices, the
+> "apply update" step calls the vendor's update interface instead.
+
 ### Agents
 
 | Agent | Job | Shown on |
 |---|---|---|
 | **Discovery Agent** | Scans each provisioned site, recognises every device, reads its firmware and checks whether it is online | Devices page |
-| **Compliance Agent** | Checks every discovered device against the compliance rules and the standards it violates | Devices page (Compliant + Standard & Requirement Violated columns) |
+| **Compliance Agent** | Checks every discovered device against the compliance rules, the approved firmware baseline and the standards it violates | Non-Compliance page; Devices page (Compliant + Standard & Requirement Violated columns) |
+| **AI Remediation Agent** | Updates non-compliant devices to approved firmware from the repository, reboots and re-checks them; skips devices that need change control | Compliance page |
 
-Agents only read what a device reveals; they never log in or send commands.
+The Discovery and Compliance Agents only read what a device reveals; they never log in or send commands.
 
 ### Standards violated
 
@@ -44,6 +92,7 @@ From the non-compliance table provided by the client:
 | Hardcoded/Default Credentials | IEC 62443-4-2 (Identification & Access Control) | PDU, DER gateway, IoT sensor |
 | Missing Audit Logging | NERC CIP-007 & CIP-015 (Internal Network Monitoring) | PLC |
 | Unrestricted Remote Access | NERC CIP-003-9 (Vendor Electronic Access Control) | Terminal server |
+| Unapproved Firmware Baseline | NERC CIP-010-4 (Configuration Change Management) | Any device whose firmware differs from the approved baseline |
 
 ## Run it on your machine
 
@@ -111,9 +160,15 @@ Open **http://localhost:8000/devices**.
 1. Select **Utilities**, **South Africa**, **Eskom** → **Run agent** turns orange.
 2. Press **Run agent** → the agent's steps appear, then 6 devices, all *Online*
    (DER gateway and IoT sensor show *Streaming*).
-3. Every device shows **Non-Compliant** and the standards it violates.
+3. Every device shows its compliance status and the standards it violates.
 4. Stop one device (e.g. the PLC) and press **Run agent** again → it shows *Offline*.
 5. Type `modbus` in Global search → only the PLC and RTU remain.
+6. Open **Non-Compliance** and press **Run agent** → 2 Non-compliant (PLC, PDU),
+   1 Needs change control (RTU), 3 Partially compliant (terminal server,
+   DER gateway, IoT sensor). Click a count to filter the cards.
+7. Open **Compliance** and press **Run agent** → each device's steps light up;
+   at the end 5 of 6 are Compliant and the RTU shows *Change approval required*.
+   **Undo updates and start again** resets the demo.
 
 ### Stop
 
@@ -124,6 +179,7 @@ Open **http://localhost:8000/devices**.
 
 | Problem | Fix |
 |---|---|
+| `No module named uvicorn` (or fastapi, pymodbus, paho) | The environment is not active. In `sector-utilities` run `source portal/.venv/bin/activate`, then `python -m uvicorn ...` (not `python3` from `/usr/bin`) |
 | "Address already in use" | An earlier run is still active; stop it and start again |
 | DER / IoT show "No data stream" | Check Mosquitto is running (`sudo service mosquitto status`) |
 | No devices after Run agent | Check the device scripts are running in Terminal 1 |
@@ -142,9 +198,14 @@ provisioned to it. Add an entry and it appears in the dropdowns.
   "location": "South Africa",
   "scan_host": "127.0.0.1",
   "mqtt_broker": "127.0.0.1",
-  "mqtt_port": 1883
+  "mqtt_port": 1883,
+  "device_names": { "terminal_server": "Eskom Terminal Server" }
 }
 ```
+
+`device_names` (optional) replaces the name a device reports with your own,
+per device type. The sidebar's Environment box shows the selected company and
+location.
 
 ## Project layout
 
@@ -157,15 +218,17 @@ portal/
       fingerprints.py       How devices are recognised (add a class for a new type)
       discovery_agent.py    Discovery Agent
       compliance_agent.py   Compliance Agent, rule sets and standards violated
+      remediation_agent.py  AI Remediation Agent (update, reboot, re-check)
       store.py              Reports saved as JSON in backend/reports/
     config.py               Scan ports, timings (environment variables)
     sites.json              Provisioned sites
+    firmware_repository.json  Approved and latest firmware per device type
     main.py                 API; runs the agents on demand
   frontend/src/
-    pages/        DevicesPage, NonCompliancePage (M2), CompliancePage (M3)
+    pages/        DevicesPage, NonCompliancePage, CompliancePage
     components/   GlobalSearch, Dropdown, AgentPanel, Sidebar, badges and cards
     context/      FilterContext (global search shared by all pages)
-    hooks/        usePolling, useDevices, useAgent
+    hooks/        usePolling, useDevices, useCompliance, useRemediation, useAgent
 ```
 
 API:
@@ -174,8 +237,10 @@ API:
 GET  /api/devices               Discovery report + compliance verdict and standards violated
 GET  /api/filters               Sector / location / company options
 GET  /api/compliance            Compliance Agent report
-GET  /api/agents                Status and live activity of both agents
-POST /api/agents/{name}/run     Run "discovery" or "compliance" now
+GET  /api/remediation           AI Remediation Agent report
+POST /api/remediation/reset     Undo the agent's firmware updates
+GET  /api/agents                Status and live activity of every agent
+POST /api/agents/{name}/run     Run "discovery", "compliance" or "remediation" now
 ```
 
 ## Configuration
@@ -187,6 +252,9 @@ POST /api/agents/{name}/run     Run "discovery" or "compliance" now
 | `DISCOVERY_INTERVAL` | `0` | Seconds between automatic discovery runs (0 = only when "Run agent" is pressed, plus once at start-up) |
 | `COMPLIANCE_INTERVAL` | `0` | Seconds between automatic compliance runs |
 | `SITES_FILE` | `backend/sites.json` | Provisioned sites |
+| `FIRMWARE_REPOSITORY_FILE` | `backend/firmware_repository.json` | Approved and latest firmware per device type |
+| `REMEDIATION_STEP_SECONDS` | `0.8` | Pause per remediation step, so the flow can be followed live |
+| `KEEP_REMEDIATION` | `0` | `1` keeps installed updates after a restart |
 
 ## Notes
 

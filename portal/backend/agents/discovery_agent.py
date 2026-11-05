@@ -38,8 +38,12 @@ class DiscoveryAgent(Agent):
         for site in sites:
             tcp_devices, (broker_up, mqtt_devices) = await self._scan_site(site)
             brokers_up[self._broker(site)] = broker_up
+            names = site.get("device_names", {})
             for d in tcp_devices + mqtt_devices:
                 d.update({k: site[k] for k in SITE_FIELDS})
+                # optional per-site display name, e.g. "Eskom Terminal Server"
+                if d["category"] in names:
+                    d["reported_name"], d["name"] = d["name"], names[d["category"]]
                 found[d["id"]] = d
 
         active = len(found)

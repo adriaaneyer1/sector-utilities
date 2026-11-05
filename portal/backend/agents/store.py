@@ -18,6 +18,9 @@ class ReportStore:
         tmp.write_text(json.dumps(report, indent=2), encoding="utf-8")
         os.replace(tmp, path)  # atomic: readers never see a half-written file
 
+    def delete(self, name):
+        self._path(name).unlink(missing_ok=True)
+
     def load(self, name):
         try:
             return json.loads(self._path(name).read_text(encoding="utf-8"))

@@ -1,0 +1,33 @@
+{
+  "_note": "Firmware repository per device type. 'approved' = change-control baseline (a device running anything else is 'Needs change control'). 'latest' = the version the AI Remediation Agent installs. 'fixes' = finding codes that version resolves. Example values: replace with your vendor's releases.",
+  "plc": {
+    "approved": ["ds-sec-0.9.b8831", "ds-sec-1.0.0"],
+    "latest": "ds-sec-1.0.0",
+    "fixes": ["modbus_no_tls", "modbus_no_auth"]
+  },
+  "rtu": {
+    "approved": ["2.2.0"],
+    "latest": "2.2.0",
+    "fixes": ["modbus_cleartext"]
+  },
+  "pdu": {
+    "approved": ["pdu-sec-3.1.0"],
+    "latest": "pdu-sec-3.1.0",
+    "fixes": ["console_reusable_passwords", "console_auth_bypass"]
+  },
+  "terminal_server": {
+    "approved": ["v2.1.0-secure", "v2.2.0-secure"],
+    "latest": "v2.2.0-secure",
+    "fixes": ["console_topology_leak", "console_auth_bypass"]
+  },
+  "der_gateway": {
+    "approved": ["v2.4.1-secure", "v2.5.0-secure"],
+    "latest": "v2.5.0-secure",
+    "fixes": ["mqtt_cleartext_ids"]
+  },
+  "iot_sensor": {
+    "approved": ["2.1.4-secure", "2.2.0-secure"],
+    "latest": "2.2.0-secure",
+    "fixes": ["mqtt_cleartext_ids"]
+  }
+}
